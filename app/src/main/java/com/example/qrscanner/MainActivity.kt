@@ -32,11 +32,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FlashOff
 import androidx.compose.material.icons.outlined.FlashOn
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -49,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +66,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.example.qrscanner.update.GitHubUpdateService
+import com.example.qrscanner.update.ReleaseInfo
+import com.example.qrscanner.update.UpdateState
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -70,6 +76,7 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.example.qrscanner.ui.theme.QRScannerTheme
+import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -90,6 +97,8 @@ class MainActivity : ComponentActivity() {
 private fun QrScannerApp() {
     val context = LocalContext.current
     val scanner = rememberQrScanner()
+    val updateService = remember { GitHubUpdateService(context.applicationContext) }
+    val scope = rememberCoroutineScope()
     var permissionGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -105,6 +114,9 @@ private fun QrScannerApp() {
     var scannedResult by remember { mutableStateOf<QrScanResult?>(null) }
     var torchEnabled by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
+    var lastAvailableRelease by remember { mutableStateOf<ReleaseInfo?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val analyzerExecutor = rememberSingleThreadExecutor()
 
@@ -112,6 +124,16 @@ private fun QrScannerApp() {
         if (!permissionGranted) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
+        runUpdateCheck(
+            service = updateService,
+            isManual = false,
+            onStateChange = { state ->
+                updateState = state
+                if (state is UpdateState.UpdateAvailable) {
+                    lastAvailableRelease = state.releaseInfo
+                }
+            }
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -120,7 +142,15 @@ private fun QrScannerApp() {
                 modifier = Modifier.fillMaxSize(),
                 topBar = {
                     TopAppBar(
-                        title = { Text(text = "QR Scanner") }
+                        title = { Text(text = "QR Scanner") },
+                        actions = {
+                            IconButton(onClick = { settingsOpen = true }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Settings,
+                                    contentDescription = "Open settings"
+                                )
+                            }
+                        }
                     )
                 },
                 bottomBar = {
@@ -188,6 +218,76 @@ private fun QrScannerApp() {
             )
         }
 
+        if (settingsOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { settingsOpen = false },
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            ) {
+                SettingsSheet(
+                    updateState = updateState,
+                    onCheckUpdate = {
+                        scope.launch {
+                            runUpdateCheck(
+                                service = updateService,
+                                isManual = true,
+                                onStateChange = { state ->
+                                    updateState = state
+                                    if (state is UpdateState.UpdateAvailable) {
+                                        lastAvailableRelease = state.releaseInfo
+                                    }
+                                }
+                            )
+                        }
+                    },
+                    onRetryDownload = {
+                        val release = lastAvailableRelease ?: return@SettingsSheet
+                        scope.launch {
+                            runDownloadAndInstall(
+                                service = updateService,
+                                releaseInfo = release,
+                                onStateChange = { updateState = it }
+                            )
+                        }
+                    },
+                    onInstallReady = { apkFile ->
+                        updateState = updateService.launchInstaller(apkFile).fold(
+                            onSuccess = { UpdateState.Idle },
+                            onFailure = {
+                                UpdateState.InstallFailed(
+                                    it.message ?: "Install launch failed."
+                                )
+                            }
+                        )
+                    }
+                )
+            }
+        }
+
+        if (updateState is UpdateState.UpdateAvailable) {
+            val releaseInfo = (updateState as UpdateState.UpdateAvailable).releaseInfo
+            ModalBottomSheet(
+                onDismissRequest = { },
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            ) {
+                UpdateAvailableSheet(
+                    releaseInfo = releaseInfo,
+                    onUpdateNow = {
+                        scope.launch {
+                            runDownloadAndInstall(
+                                service = updateService,
+                                releaseInfo = releaseInfo,
+                                onStateChange = { updateState = it }
+                            )
+                        }
+                    },
+                    onLater = {
+                        updateService.markLaterForCurrentAppVersion()
+                        updateState = UpdateState.Idle
+                    }
+                )
+            }
+        }
+
         scannedResult?.let { result ->
             ModalBottomSheet(
                 onDismissRequest = { scannedResult = null },
@@ -203,6 +303,53 @@ private fun QrScannerApp() {
             }
         }
     }
+}
+
+private suspend fun runUpdateCheck(
+    service: GitHubUpdateService,
+    isManual: Boolean,
+    onStateChange: (UpdateState) -> Unit
+) {
+    onStateChange(UpdateState.Checking)
+    val installedVersionName = service.getInstalledVersionName()
+    service.checkLatestRelease().fold(
+        onSuccess = { releaseInfo ->
+            val isNewer = service.isUpdateAvailable(installedVersionName, releaseInfo.tag)
+            when {
+                !isNewer -> onStateChange(UpdateState.NoUpdate)
+                !isManual && !service.shouldAutoPrompt() -> onStateChange(UpdateState.Idle)
+                else -> onStateChange(UpdateState.UpdateAvailable(releaseInfo))
+            }
+        },
+        onFailure = { error ->
+            onStateChange(UpdateState.DownloadFailed(error.message ?: "Update check failed."))
+        }
+    )
+}
+
+private suspend fun runDownloadAndInstall(
+    service: GitHubUpdateService,
+    releaseInfo: ReleaseInfo,
+    onStateChange: (UpdateState) -> Unit
+) {
+    onStateChange(UpdateState.Downloading(progress = 0))
+    service.downloadApk(releaseInfo) { progress ->
+        onStateChange(UpdateState.Downloading(progress))
+    }.fold(
+        onSuccess = { apkFile ->
+            onStateChange(UpdateState.InstallReady(apkFile, releaseInfo))
+            val installResult = service.launchInstaller(apkFile)
+            onStateChange(
+                installResult.fold(
+                    onSuccess = { UpdateState.Idle },
+                    onFailure = { UpdateState.InstallFailed(it.message ?: "Install failed.") }
+                )
+            )
+        },
+        onFailure = { error ->
+            onStateChange(UpdateState.DownloadFailed(error.message ?: "Download failed."))
+        }
+    )
 }
 
 @Composable
@@ -405,6 +552,83 @@ private fun ResultSheet(
             Button(onClick = onRescan) { Text("Rescan") }
         }
         Box(modifier = Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun UpdateAvailableSheet(
+    releaseInfo: ReleaseInfo,
+    onUpdateNow: () -> Unit,
+    onLater: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Update available (${releaseInfo.tag})",
+            style = MaterialTheme.typography.titleMedium
+        )
+        Text(
+            text = releaseInfo.shortNotes,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = onUpdateNow) { Text("Update now") }
+            Button(onClick = onLater) { Text("Later") }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSheet(
+    updateState: UpdateState,
+    onCheckUpdate: () -> Unit,
+    onRetryDownload: () -> Unit,
+    onInstallReady: (java.io.File) -> Unit
+) {
+    val statusText = when (updateState) {
+        UpdateState.Idle -> "Idle"
+        UpdateState.Checking -> "Checking for updates..."
+        UpdateState.NoUpdate -> "No update available."
+        is UpdateState.UpdateAvailable -> "Update found: ${updateState.releaseInfo.tag}"
+        is UpdateState.Downloading -> "Downloading update: ${updateState.progress}%"
+        is UpdateState.DownloadFailed -> "Download failed: ${updateState.message}"
+        is UpdateState.InstallReady -> "Download complete. Ready to install."
+        is UpdateState.InstallFailed -> "Install failed: ${updateState.message}"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Settings",
+            style = MaterialTheme.typography.titleMedium
+        )
+        Text(
+            text = statusText,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Button(onClick = onCheckUpdate) {
+            Text("Check for updates")
+        }
+
+        if (updateState is UpdateState.DownloadFailed) {
+            Button(onClick = onRetryDownload) {
+                Text("Retry download")
+            }
+        }
+
+        if (updateState is UpdateState.InstallReady) {
+            Button(onClick = { onInstallReady(updateState.apkFile) }) {
+                Text("Install downloaded APK")
+            }
+        }
     }
 }
 
