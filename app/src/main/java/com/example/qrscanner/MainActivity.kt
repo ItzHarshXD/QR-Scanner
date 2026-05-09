@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -32,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FlashOff
 import androidx.compose.material.icons.outlined.FlashOn
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
@@ -77,6 +79,9 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.example.qrscanner.ui.theme.QRScannerTheme
 import kotlinx.coroutines.launch
+import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -117,6 +122,18 @@ private fun QrScannerApp() {
     var settingsOpen by remember { mutableStateOf(false) }
     var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
     var lastAvailableRelease by remember { mutableStateOf<ReleaseInfo?>(null) }
+    val imagePickerLauncher = rememberImagePickerLauncher { selectedUri ->
+        if (selectedUri != null) {
+            scope.launch {
+                val barcode = scanQrFromGalleryImage(context, scanner, selectedUri)
+                if (barcode?.rawValue.isNullOrBlank()) {
+                    updateState = UpdateState.DownloadFailed("No QR code found in selected image.")
+                } else {
+                    scannedResult = QrScanResult.fromBarcode(barcode)
+                }
+            }
+        }
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val analyzerExecutor = rememberSingleThreadExecutor()
 
@@ -165,6 +182,16 @@ private fun QrScannerApp() {
                                 Icon(
                                     imageVector = if (torchEnabled) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
                                     contentDescription = if (torchEnabled) "Turn torch off" else "Turn torch on"
+                                )
+                            }
+                            FilledIconButton(
+                                onClick = {
+                                    imagePickerLauncher.launch("image/*")
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.PhotoLibrary,
+                                    contentDescription = "Scan from gallery"
                                 )
                             }
                         }
@@ -648,6 +675,39 @@ private fun openResultAction(context: Context, result: QrScanResult) {
     }
 }
 
+private suspend fun scanQrFromGalleryImage(
+    context: Context,
+    scanner: BarcodeScanner,
+    imageUri: Uri
+): Barcode? {
+    return try {
+        val bytes = context.contentResolver.openInputStream(imageUri)?.use { input ->
+            input.readBytes()
+        } ?: return null
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val image = InputImage.fromBitmap(bitmap, 0)
+        val barcodes = processImageForQrs(scanner, image)
+        barcodes.firstOrNull { it.rawValue?.isNotBlank() == true }
+    } catch (_: IOException) {
+        null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private suspend fun processImageForQrs(
+    scanner: BarcodeScanner,
+    image: InputImage
+): List<Barcode> = kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+    scanner.process(image)
+        .addOnSuccessListener { barcodes ->
+            if (continuation.isActive) continuation.resume(barcodes) {}
+        }
+        .addOnFailureListener { error ->
+            if (continuation.isActive) continuation.resumeWithException(error)
+        }
+}
+
 @Composable
 private fun rememberQrScanner(): BarcodeScanner {
     val scanner = remember {
@@ -676,6 +736,14 @@ private fun rememberPermissionLauncher(
     onResult: (Boolean) -> Unit
 ) = androidx.activity.compose.rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestPermission(),
+    onResult = onResult
+)
+
+@Composable
+private fun rememberImagePickerLauncher(
+    onResult: (Uri?) -> Unit
+) = androidx.activity.compose.rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.GetContent(),
     onResult = onResult
 )
 
