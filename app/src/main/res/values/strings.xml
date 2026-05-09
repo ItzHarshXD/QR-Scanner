@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">QR Scanner</string>
+    <string name="permission_rationale">Camera permission is required to scan QR codes.</string>
+</resources>
