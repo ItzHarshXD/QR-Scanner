@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -69,9 +70,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.example.qrscanner.update.GitHubUpdateService
-import com.example.qrscanner.update.ReleaseInfo
-import com.example.qrscanner.update.UpdateState
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -85,6 +83,10 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+
+/** Opens GitHub Releases in the browser so the user can download the APK manually. */
+private const val GITHUB_RELEASES_LATEST_URL =
+    "https://github.com/ItzHarshXD/QR-Scanner/releases/latest"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -103,7 +105,6 @@ class MainActivity : ComponentActivity() {
 private fun QrScannerApp() {
     val context = LocalContext.current
     val scanner = rememberQrScanner()
-    val updateService = remember { GitHubUpdateService(context.applicationContext) }
     val scope = rememberCoroutineScope()
     var permissionGranted by remember {
         mutableStateOf(
@@ -123,14 +124,16 @@ private fun QrScannerApp() {
     var useFrontCamera by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
-    var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
-    var lastAvailableRelease by remember { mutableStateOf<ReleaseInfo?>(null) }
     val imagePickerLauncher = rememberImagePickerLauncher { selectedUri ->
         if (selectedUri != null) {
             scope.launch {
                 val barcode = scanQrFromGalleryImage(context, scanner, selectedUri)
                 if (barcode?.rawValue.isNullOrBlank()) {
-                    updateState = UpdateState.DownloadFailed("No QR code found in selected image.")
+                    Toast.makeText(
+                        context,
+                        "No QR code found in that image.",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 } else {
                     scannedResult = QrScanResult.fromBarcode(barcode)
                 }
@@ -144,16 +147,6 @@ private fun QrScannerApp() {
         if (!permissionGranted) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
-        runUpdateCheck(
-            service = updateService,
-            isManual = false,
-            onStateChange = { state ->
-                updateState = state
-                if (state is UpdateState.UpdateAvailable) {
-                    lastAvailableRelease = state.releaseInfo
-                }
-            }
-        )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -275,65 +268,9 @@ private fun QrScannerApp() {
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
             ) {
                 SettingsSheet(
-                    updateState = updateState,
-                    onCheckUpdate = {
-                        scope.launch {
-                            runUpdateCheck(
-                                service = updateService,
-                                isManual = true,
-                                onStateChange = { state ->
-                                    updateState = state
-                                    if (state is UpdateState.UpdateAvailable) {
-                                        lastAvailableRelease = state.releaseInfo
-                                    }
-                                }
-                            )
-                        }
-                    },
-                    onRetryDownload = {
-                        val release = lastAvailableRelease ?: return@SettingsSheet
-                        scope.launch {
-                            runDownloadAndInstall(
-                                service = updateService,
-                                releaseInfo = release,
-                                onStateChange = { updateState = it }
-                            )
-                        }
-                    },
-                    onInstallReady = { apkFile ->
-                        updateState = updateService.launchInstaller(apkFile).fold(
-                            onSuccess = { UpdateState.Idle },
-                            onFailure = {
-                                UpdateState.InstallFailed(
-                                    it.message ?: "Install launch failed."
-                                )
-                            }
-                        )
-                    }
-                )
-            }
-        }
-
-        if (updateState is UpdateState.UpdateAvailable) {
-            val releaseInfo = (updateState as UpdateState.UpdateAvailable).releaseInfo
-            ModalBottomSheet(
-                onDismissRequest = { },
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
-            ) {
-                UpdateAvailableSheet(
-                    releaseInfo = releaseInfo,
-                    onUpdateNow = {
-                        scope.launch {
-                            runDownloadAndInstall(
-                                service = updateService,
-                                releaseInfo = releaseInfo,
-                                onStateChange = { updateState = it }
-                            )
-                        }
-                    },
-                    onLater = {
-                        updateService.markLaterForCurrentAppVersion()
-                        updateState = UpdateState.Idle
+                    onOpenReleasesPage = {
+                        openGitHubReleasesInBrowser(context)
+                        settingsOpen = false
                     }
                 )
             }
@@ -356,51 +293,15 @@ private fun QrScannerApp() {
     }
 }
 
-private suspend fun runUpdateCheck(
-    service: GitHubUpdateService,
-    isManual: Boolean,
-    onStateChange: (UpdateState) -> Unit
-) {
-    onStateChange(UpdateState.Checking)
-    val installedVersionName = service.getInstalledVersionName()
-    service.checkLatestRelease().fold(
-        onSuccess = { releaseInfo ->
-            val isNewer = service.isUpdateAvailable(installedVersionName, releaseInfo.tag)
-            when {
-                !isNewer -> onStateChange(UpdateState.NoUpdate)
-                !isManual && !service.shouldAutoPrompt() -> onStateChange(UpdateState.Idle)
-                else -> onStateChange(UpdateState.UpdateAvailable(releaseInfo))
-            }
-        },
-        onFailure = { error ->
-            onStateChange(UpdateState.DownloadFailed(error.message ?: "Update check failed."))
-        }
-    )
-}
-
-private suspend fun runDownloadAndInstall(
-    service: GitHubUpdateService,
-    releaseInfo: ReleaseInfo,
-    onStateChange: (UpdateState) -> Unit
-) {
-    onStateChange(UpdateState.Downloading(progress = 0))
-    service.downloadApk(releaseInfo) { progress ->
-        onStateChange(UpdateState.Downloading(progress))
-    }.fold(
-        onSuccess = { apkFile ->
-            onStateChange(UpdateState.InstallReady(apkFile, releaseInfo))
-            val installResult = service.launchInstaller(apkFile)
-            onStateChange(
-                installResult.fold(
-                    onSuccess = { UpdateState.Idle },
-                    onFailure = { UpdateState.InstallFailed(it.message ?: "Install failed.") }
-                )
-            )
-        },
-        onFailure = { error ->
-            onStateChange(UpdateState.DownloadFailed(error.message ?: "Download failed."))
-        }
-    )
+private fun openGitHubReleasesInBrowser(context: Context) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_RELEASES_LATEST_URL)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        Toast.makeText(context, "No app can open this link.", Toast.LENGTH_SHORT).show()
+    }
 }
 
 @Composable
@@ -630,50 +531,9 @@ private fun ResultSheet(
 }
 
 @Composable
-private fun UpdateAvailableSheet(
-    releaseInfo: ReleaseInfo,
-    onUpdateNow: () -> Unit,
-    onLater: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = "Update available (${releaseInfo.tag})",
-            style = MaterialTheme.typography.titleMedium
-        )
-        Text(
-            text = releaseInfo.shortNotes,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onUpdateNow) { Text("Update now") }
-            Button(onClick = onLater) { Text("Later") }
-        }
-    }
-}
-
-@Composable
 private fun SettingsSheet(
-    updateState: UpdateState,
-    onCheckUpdate: () -> Unit,
-    onRetryDownload: () -> Unit,
-    onInstallReady: (java.io.File) -> Unit
+    onOpenReleasesPage: () -> Unit
 ) {
-    val statusText = when (updateState) {
-        UpdateState.Idle -> "Idle"
-        UpdateState.Checking -> "Checking for updates..."
-        UpdateState.NoUpdate -> "No update available."
-        is UpdateState.UpdateAvailable -> "Update found: ${updateState.releaseInfo.tag}"
-        is UpdateState.Downloading -> "Downloading update: ${updateState.progress}%"
-        is UpdateState.DownloadFailed -> "Download failed: ${updateState.message}"
-        is UpdateState.InstallReady -> "Download complete. Ready to install."
-        is UpdateState.InstallFailed -> "Install failed: ${updateState.message}"
-    }
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -685,23 +545,12 @@ private fun SettingsSheet(
             style = MaterialTheme.typography.titleMedium
         )
         Text(
-            text = statusText,
-            style = MaterialTheme.typography.bodyMedium
+            text = "Opens the GitHub releases page in your browser. Download the APK there, then open it from Downloads (or your notification) to install.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Button(onClick = onCheckUpdate) {
-            Text("Check for updates")
-        }
-
-        if (updateState is UpdateState.DownloadFailed) {
-            Button(onClick = onRetryDownload) {
-                Text("Retry download")
-            }
-        }
-
-        if (updateState is UpdateState.InstallReady) {
-            Button(onClick = { onInstallReady(updateState.apkFile) }) {
-                Text("Install downloaded APK")
-            }
+        Button(onClick = onOpenReleasesPage) {
+            Text("Get latest APK (GitHub)")
         }
     }
 }
