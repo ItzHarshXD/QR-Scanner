@@ -24,9 +24,9 @@ class GitHubUpdateService(
     private val context: Context
 ) {
     companion object {
-        // Replace these with your GitHub owner/repo.
-        private const val GITHUB_OWNER = "your-owner"
-        private const val GITHUB_REPO = "your-repo"
+        // GitHub Releases source for in-app updates.
+        private const val GITHUB_OWNER = "ItzHarshXD"
+        private const val GITHUB_REPO = "QR-Scanner"
         private const val PREFS_NAME = "updater_prefs"
         private const val KEY_LAST_LATER_APP_VERSION_CODE = "last_later_app_version_code"
         private const val MAX_NOTES_LENGTH = 280
