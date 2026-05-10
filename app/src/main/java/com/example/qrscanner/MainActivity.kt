@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Cameraswitch
 import androidx.compose.material.icons.outlined.FlashOff
 import androidx.compose.material.icons.outlined.FlashOn
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -118,6 +119,8 @@ private fun QrScannerApp() {
 
     var scannedResult by remember { mutableStateOf<QrScanResult?>(null) }
     var torchEnabled by remember { mutableStateOf(false) }
+    /** When false, rear camera (default). When true, front/selfie camera. */
+    var useFrontCamera by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
     var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
@@ -177,11 +180,30 @@ private fun QrScannerApp() {
                                 onClick = {
                                     torchEnabled = !torchEnabled
                                     camera?.cameraControl?.enableTorch(torchEnabled)
-                                }
+                                },
+                                enabled = !useFrontCamera
                             ) {
                                 Icon(
                                     imageVector = if (torchEnabled) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
                                     contentDescription = if (torchEnabled) "Turn torch off" else "Turn torch on"
+                                )
+                            }
+                            FilledIconButton(
+                                onClick = {
+                                    useFrontCamera = !useFrontCamera
+                                    if (useFrontCamera) {
+                                        torchEnabled = false
+                                        camera?.cameraControl?.enableTorch(false)
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Cameraswitch,
+                                    contentDescription = if (useFrontCamera) {
+                                        "Switch to rear camera"
+                                    } else {
+                                        "Switch to front camera"
+                                    }
                                 )
                             }
                             FilledIconButton(
@@ -208,6 +230,8 @@ private fun QrScannerApp() {
                         lifecycleOwner = lifecycleOwner,
                         analyzerExecutor = analyzerExecutor,
                         scanner = scanner,
+                        useFrontCamera = useFrontCamera,
+                        onFrontCameraUnavailable = { useFrontCamera = false },
                         pauseAnalysis = scannedResult != null,
                         onCameraReady = { readyCamera -> camera = readyCamera },
                         onQrDetected = { barcode ->
@@ -420,6 +444,8 @@ private fun CameraPreview(
     lifecycleOwner: androidx.lifecycle.LifecycleOwner,
     analyzerExecutor: ExecutorService,
     scanner: BarcodeScanner,
+    useFrontCamera: Boolean,
+    onFrontCameraUnavailable: () -> Unit,
     pauseAnalysis: Boolean,
     onCameraReady: (Camera) -> Unit,
     onQrDetected: (Barcode) -> Unit
@@ -441,6 +467,8 @@ private fun CameraPreview(
                 previewView = previewView,
                 analyzerExecutor = analyzerExecutor,
                 scanner = scanner,
+                useFrontCamera = useFrontCamera,
+                onFrontCameraUnavailable = onFrontCameraUnavailable,
                 pauseAnalysis = pauseAnalysis,
                 onCameraReady = onCameraReady,
                 onQrDetected = onQrDetected
@@ -456,6 +484,8 @@ private fun bindCamera(
     previewView: PreviewView,
     analyzerExecutor: ExecutorService,
     scanner: BarcodeScanner,
+    useFrontCamera: Boolean,
+    onFrontCameraUnavailable: () -> Unit,
     pauseAnalysis: Boolean,
     onCameraReady: (Camera) -> Unit,
     onQrDetected: (Barcode) -> Unit
@@ -480,15 +510,32 @@ private fun bindCamera(
                     )
                 }
 
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            val cameraSelector = if (useFrontCamera) {
+                CameraSelector.DEFAULT_FRONT_CAMERA
+            } else {
+                CameraSelector.DEFAULT_BACK_CAMERA
+            }
             cameraProvider.unbindAll()
-            val camera = cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                cameraSelector,
-                preview,
-                analyzer
-            )
-            onCameraReady(camera)
+            try {
+                val camera = cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    preview,
+                    analyzer
+                )
+                onCameraReady(camera)
+            } catch (_: Exception) {
+                if (useFrontCamera) {
+                    onFrontCameraUnavailable()
+                    val fallback = cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        analyzer
+                    )
+                    onCameraReady(fallback)
+                }
+            }
         },
         ContextCompat.getMainExecutor(context)
     )
