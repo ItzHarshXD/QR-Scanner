@@ -49,10 +49,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -108,6 +107,7 @@ import java.util.concurrent.Executors
 private const val GITHUB_RELEASES_LATEST_URL =
     "https://github.com/ItzHarshXD/QR-Scanner/releases/latest"
 
+@OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -190,27 +190,50 @@ private fun QrScannerApp() {
                 },
                 bottomBar = {
                     BottomAppBar(
-                        actions = {
-                            FilledIconButton(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Flashlight button
+                            FloatingActionButton(
                                 onClick = {
                                     torchEnabled = !torchEnabled
                                     camera?.cameraControl?.enableTorch(torchEnabled)
                                 },
-                                enabled = !useFrontCamera
+                                modifier = Modifier.size(48.dp),
+                                containerColor = if (torchEnabled) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surface
+                                },
+                                contentColor = if (torchEnabled) {
+                                    MaterialTheme.colorScheme.onPrimary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
                             ) {
                                 Icon(
                                     imageVector = if (torchEnabled) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
                                     contentDescription = if (torchEnabled) "Turn torch off" else "Turn torch on"
                                 )
                             }
-                            FilledIconButton(
+                            
+                            // Camera switch button
+                            FloatingActionButton(
                                 onClick = {
                                     useFrontCamera = !useFrontCamera
                                     if (useFrontCamera) {
                                         torchEnabled = false
                                         camera?.cameraControl?.enableTorch(false)
                                     }
-                                }
+                                },
+                                modifier = Modifier.size(48.dp),
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface
                             ) {
                                 Icon(
                                     imageVector = Icons.Outlined.Cameraswitch,
@@ -221,44 +244,23 @@ private fun QrScannerApp() {
                                     }
                                 )
                             }
-                            FilledIconButton(
+                            
+                            // Gallery button
+                            FloatingActionButton(
                                 onClick = {
                                     imagePickerLauncher.launch("image/*")
-                                }
+                                },
+                                modifier = Modifier.size(48.dp),
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface
                             ) {
                                 Icon(
                                     imageVector = Icons.Outlined.PhotoLibrary,
                                     contentDescription = "Scan from gallery"
                                 )
                             }
-                            FilledIconButton(
-                                onClick = {
-                                    val newZoom = (zoomRatio - 0.1f).coerceAtLeast(0f)
-                                    zoomRatio = newZoom
-                                    camera?.cameraControl?.setLinearZoom(newZoom)
-                                },
-                                enabled = zoomRatio > 0f && maxZoomRatio > 0f
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.ZoomOut,
-                                    contentDescription = "Zoom out"
-                                )
-                            }
-                            FilledIconButton(
-                                onClick = {
-                                    val newZoom = (zoomRatio + 0.1f).coerceAtMost(maxZoomRatio)
-                                    zoomRatio = newZoom
-                                    camera?.cameraControl?.setLinearZoom(newZoom)
-                                },
-                                enabled = zoomRatio < maxZoomRatio && maxZoomRatio > 0f
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.ZoomIn,
-                                    contentDescription = "Zoom in"
-                                )
-                            }
                         }
-                    )
+                    }
                 }
             ) { innerPadding ->
                 Box(
@@ -289,46 +291,91 @@ private fun QrScannerApp() {
                                 zoomRatio = zoomState.linearZoom
                             }
                         },
-                        onQrDetected = { barcode ->
+                        onQrDetected = { barcode, bitmap ->
                             val raw = barcode.rawValue.orEmpty()
                             if (raw.isNotBlank()) {
-                                scannedResult = QrScanResult.fromBarcode(barcode)
+                                scannedResult = QrScanResult.fromBarcode(barcode, bitmap)
                             }
                         }
                     )
-                    ScannerFrameOverlay(
-                        modifier = Modifier.fillMaxSize(),
-                        zoomRatio = zoomRatio,
-                        maxZoomRatio = maxZoomRatio
-                    )
-                    Card(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(horizontal = 16.dp, vertical = 24.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
-                        ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                    Box(
+                        modifier = Modifier.fillMaxSize()
                     ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                        ScannerFrameOverlay(
+                            modifier = Modifier.fillMaxSize(),
+                            zoomRatio = zoomRatio,
+                            maxZoomRatio = maxZoomRatio
+                        )
+                        
+                        // Zoom controls inside camera frame
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 80.dp)
+                                .background(
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                    shape = RoundedCornerShape(24.dp)
+                                )
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    val newZoom = (zoomRatio - 0.1f).coerceAtLeast(0f)
+                                    zoomRatio = newZoom
+                                    camera?.cameraControl?.setLinearZoom(newZoom)
+                                },
+                                enabled = zoomRatio > 0f
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ZoomOut,
+                                    contentDescription = "Zoom out",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            
+                            if (zoomRatio > 0f) {
+                                Text(
+                                    text = "${(zoomRatio * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.align(Alignment.CenterVertically)
+                                )
+                            }
+                            
+                            IconButton(
+                                onClick = {
+                                    val newZoom = (zoomRatio + 0.1f).coerceAtMost(maxZoomRatio)
+                                    zoomRatio = newZoom
+                                    camera?.cameraControl?.setLinearZoom(newZoom)
+                                },
+                                enabled = zoomRatio < maxZoomRatio
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ZoomIn,
+                                    contentDescription = "Zoom in",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                        
+                        Card(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(horizontal = 16.dp, vertical = 24.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                         ) {
                             Text(
                                 text = "Align QR code or barcode within the frame",
+                                modifier = Modifier.padding(16.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 textAlign = TextAlign.Center
                             )
-                            if (zoomRatio > 0f && maxZoomRatio > 0f) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Zoom: ${(zoomRatio * 100).toInt()}%",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
                         }
                     }
                 }
@@ -436,7 +483,7 @@ private fun CameraPreview(
     onFrontCameraUnavailable: () -> Unit,
     pauseAnalysis: Boolean,
     onCameraReady: (Camera) -> Unit,
-    onQrDetected: (Barcode) -> Unit
+    onQrDetected: (Barcode, Bitmap?) -> Unit
 ) {
     val context = LocalContext.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
@@ -476,7 +523,7 @@ private fun bindCamera(
     onFrontCameraUnavailable: () -> Unit,
     pauseAnalysis: Boolean,
     onCameraReady: (Camera) -> Unit,
-    onQrDetected: (Barcode) -> Unit
+    onQrDetected: (Barcode, Bitmap?) -> Unit
 ) {
     cameraProviderFuture.addListener(
         {
@@ -532,8 +579,9 @@ private fun bindCamera(
 private class QrAnalyzer(
     private val scanner: BarcodeScanner,
     private val pauseAnalysis: () -> Boolean,
-    private val onDetected: (Barcode) -> Unit
+    private val onDetected: (Barcode, Bitmap?) -> Unit
 ) : ImageAnalysis.Analyzer {
+    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
         if (pauseAnalysis()) {
             imageProxy.close()
@@ -552,7 +600,18 @@ private class QrAnalyzer(
         )
         scanner.process(image)
             .addOnSuccessListener { barcodes ->
-                barcodes.firstOrNull()?.let(onDetected)
+                barcodes.firstOrNull()?.let { barcode ->
+                    val bitmap = imageProxy.toBitmap()
+                    val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+                    val rotatedBitmap = if (rotationDegrees != 0) {
+                        val matrix = Matrix()
+                        matrix.postRotate(rotationDegrees.toFloat())
+                        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                    } else {
+                        bitmap
+                    }
+                    onDetected(barcode, rotatedBitmap)
+                }
             }
             .addOnCompleteListener {
                 imageProxy.close()
@@ -769,19 +828,19 @@ private fun ResultSheet(
         }
         
         // Action buttons
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Button(
                 onClick = onOpen,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             ) { 
                 Text(result.actionLabel) 
             }
             OutlinedButton(
                 onClick = onRescan,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             ) { 
                 Text("Rescan") 
             }
@@ -993,59 +1052,66 @@ private data class QrScanResult(
     val value: String,
     val type: ScanType,
     val actionLabel: String,
-    val barcodeImage: android.graphics.Bitmap? = null
+    val barcodeImage: Bitmap? = null
 ) {
     companion object {
-        fun fromBarcode(barcode: Barcode): QrScanResult {
+        fun fromBarcode(barcode: Barcode, bitmap: Bitmap? = null): QrScanResult {
             val value = barcode.rawValue.orEmpty()
             return when (barcode.valueType) {
                 Barcode.TYPE_URL -> QrScanResult(
                     title = "Website",
                     value = value,
                     type = ScanType.URL,
-                    actionLabel = "Open link"
+                    actionLabel = "Open link",
+                    barcodeImage = bitmap
                 )
 
                 Barcode.TYPE_WIFI -> QrScanResult(
                     title = "Wi-Fi",
                     value = value,
                     type = ScanType.WIFI,
-                    actionLabel = "Open Wi-Fi"
+                    actionLabel = "Open Wi-Fi",
+                    barcodeImage = bitmap
                 )
 
                 Barcode.TYPE_EMAIL -> QrScanResult(
                     title = "Email",
                     value = value,
                     type = ScanType.EMAIL,
-                    actionLabel = "Open Email"
+                    actionLabel = "Open Email",
+                    barcodeImage = bitmap
                 )
 
                 Barcode.TYPE_PHONE -> QrScanResult(
                     title = "Phone",
                     value = value,
                     type = ScanType.PHONE,
-                    actionLabel = "Call"
+                    actionLabel = "Call",
+                    barcodeImage = bitmap
                 )
 
                 Barcode.TYPE_SMS -> QrScanResult(
                     title = "SMS",
                     value = value,
                     type = ScanType.SMS,
-                    actionLabel = "Open Messages"
+                    actionLabel = "Open Messages",
+                    barcodeImage = bitmap
                 )
 
                 Barcode.TYPE_CALENDAR_EVENT -> QrScanResult(
                     title = "Calendar Event",
                     value = value,
                     type = ScanType.CALENDAR,
-                    actionLabel = "Open Calendar"
+                    actionLabel = "Open Calendar",
+                    barcodeImage = bitmap
                 )
 
                 Barcode.TYPE_GEO -> QrScanResult(
                     title = "Location",
                     value = value,
                     type = ScanType.LOCATION,
-                    actionLabel = "Open Maps"
+                    actionLabel = "Open Maps",
+                    barcodeImage = bitmap
                 )
 
                 else -> {
@@ -1066,7 +1132,8 @@ private data class QrScanResult(
                         title = "$format content",
                         value = value,
                         type = ScanType.TEXT,
-                        actionLabel = "Close"
+                        actionLabel = "Close",
+                        barcodeImage = bitmap
                     )
                 }
             }
