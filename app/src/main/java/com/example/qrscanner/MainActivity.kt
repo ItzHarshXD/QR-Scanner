@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -21,15 +23,18 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Cameraswitch
@@ -37,14 +42,20 @@ import androidx.compose.material.icons.outlined.FlashOff
 import androidx.compose.material.icons.outlined.FlashOn
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.ZoomIn
+import androidx.compose.material.icons.outlined.ZoomOut
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -57,17 +68,26 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.google.common.util.concurrent.ListenableFuture
@@ -124,14 +144,16 @@ private fun QrScannerApp() {
     var useFrontCamera by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var zoomRatio by remember { mutableStateOf(0f) }
+    var maxZoomRatio by remember { mutableStateOf(0f) }
     val imagePickerLauncher = rememberImagePickerLauncher { selectedUri ->
         if (selectedUri != null) {
             scope.launch {
-                val barcode = scanQrFromGalleryImage(context, scanner, selectedUri)
+                val barcode = scanCodeFromGalleryImage(context, scanner, selectedUri)
                 if (barcode?.rawValue.isNullOrBlank()) {
                     Toast.makeText(
                         context,
-                        "No QR code found in that image.",
+                        "No QR code or barcode found in that image.",
                         Toast.LENGTH_SHORT
                     ).show()
                 } else {
@@ -155,7 +177,7 @@ private fun QrScannerApp() {
                 modifier = Modifier.fillMaxSize(),
                 topBar = {
                     TopAppBar(
-                        title = { Text(text = "QR Scanner") },
+                        title = { Text(text = "QR & Barcode Scanner") },
                         actions = {
                             IconButton(onClick = { settingsOpen = true }) {
                                 Icon(
@@ -209,6 +231,32 @@ private fun QrScannerApp() {
                                     contentDescription = "Scan from gallery"
                                 )
                             }
+                            FilledIconButton(
+                                onClick = {
+                                    val newZoom = (zoomRatio - 0.1f).coerceAtLeast(0f)
+                                    zoomRatio = newZoom
+                                    camera?.cameraControl?.setLinearZoom(newZoom)
+                                },
+                                enabled = zoomRatio > 0f && maxZoomRatio > 0f
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ZoomOut,
+                                    contentDescription = "Zoom out"
+                                )
+                            }
+                            FilledIconButton(
+                                onClick = {
+                                    val newZoom = (zoomRatio + 0.1f).coerceAtMost(maxZoomRatio)
+                                    zoomRatio = newZoom
+                                    camera?.cameraControl?.setLinearZoom(newZoom)
+                                },
+                                enabled = zoomRatio < maxZoomRatio && maxZoomRatio > 0f
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ZoomIn,
+                                    contentDescription = "Zoom in"
+                                )
+                            }
                         }
                     )
                 }
@@ -219,14 +267,28 @@ private fun QrScannerApp() {
                         .padding(innerPadding)
                 ) {
                     CameraPreview(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, _, zoom, _ ->
+                                    val newZoom = (zoomRatio * zoom).coerceIn(0f, maxZoomRatio)
+                                    zoomRatio = newZoom
+                                    camera?.cameraControl?.setLinearZoom(newZoom)
+                                }
+                            },
                         lifecycleOwner = lifecycleOwner,
                         analyzerExecutor = analyzerExecutor,
                         scanner = scanner,
                         useFrontCamera = useFrontCamera,
                         onFrontCameraUnavailable = { useFrontCamera = false },
                         pauseAnalysis = scannedResult != null,
-                        onCameraReady = { readyCamera -> camera = readyCamera },
+                        onCameraReady = { readyCamera -> 
+                            camera = readyCamera
+                            readyCamera.cameraInfo.zoomState.value?.let { zoomState ->
+                                maxZoomRatio = zoomState.maxZoomRatio
+                                zoomRatio = zoomState.linearZoom
+                            }
+                        },
                         onQrDetected = { barcode ->
                             val raw = barcode.rawValue.orEmpty()
                             if (raw.isNotBlank()) {
@@ -234,16 +296,41 @@ private fun QrScannerApp() {
                             }
                         }
                     )
-                    ScannerFrameOverlay()
-                    Text(
-                        text = "Align QR code within the frame",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
+                    ScannerFrameOverlay(
+                        modifier = Modifier.fillMaxSize(),
+                        zoomRatio = zoomRatio,
+                        maxZoomRatio = maxZoomRatio
+                    )
+                    Card(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = 24.dp)
-                    )
+                            .padding(horizontal = 16.dp, vertical = 24.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Align QR code or barcode within the frame",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                            if (zoomRatio > 0f && maxZoomRatio > 0f) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Zoom: ${(zoomRatio * 100).toInt()}%",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
                 }
             }
         } else {
@@ -474,27 +561,105 @@ private class QrAnalyzer(
 }
 
 @Composable
-private fun ScannerFrameOverlay() {
+private fun ScannerFrameOverlay(
+    modifier: Modifier = Modifier,
+    zoomRatio: Float = 1.0f,
+    maxZoomRatio: Float = 1.0f
+) {
+    var scanLinePosition by remember { mutableStateOf(0f) }
+    
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameMillis { frameTime ->
+                scanLinePosition = (frameTime % 2000) / 2000f
+            }
+        }
+    }
+    
     Box(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
         Canvas(
             modifier = Modifier
-                .size(250.dp)
+                .size(280.dp)
                 .background(Color.Transparent)
         ) {
-            drawRoundRect(
-                color = Color.White.copy(alpha = 0.65f),
-                size = size,
-                cornerRadius = CornerRadius(24.dp.toPx(), 24.dp.toPx()),
-                style = Stroke(width = 3.dp.toPx())
-            )
-            val centerY = size.height / 2f
+            // Draw corner brackets
+            val cornerLength = 40.dp.toPx()
+            val cornerWidth = 4.dp.toPx()
+            val cornerColor = Color.White
+            
+            // Top-left corner
             drawLine(
-                color = Color.White.copy(alpha = 0.5f),
-                start = Offset(24.dp.toPx(), centerY),
-                end = Offset(size.width - 24.dp.toPx(), centerY),
+                color = cornerColor,
+                start = Offset(0f, cornerLength),
+                end = Offset(0f, 0f),
+                strokeWidth = cornerWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = cornerColor,
+                start = Offset(0f, 0f),
+                end = Offset(cornerLength, 0f),
+                strokeWidth = cornerWidth,
+                cap = StrokeCap.Round
+            )
+            
+            // Top-right corner
+            drawLine(
+                color = cornerColor,
+                start = Offset(size.width - cornerLength, 0f),
+                end = Offset(size.width, 0f),
+                strokeWidth = cornerWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = cornerColor,
+                start = Offset(size.width, 0f),
+                end = Offset(size.width, cornerLength),
+                strokeWidth = cornerWidth,
+                cap = StrokeCap.Round
+            )
+            
+            // Bottom-left corner
+            drawLine(
+                color = cornerColor,
+                start = Offset(0f, size.height - cornerLength),
+                end = Offset(0f, size.height),
+                strokeWidth = cornerWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = cornerColor,
+                start = Offset(0f, size.height),
+                end = Offset(cornerLength, size.height),
+                strokeWidth = cornerWidth,
+                cap = StrokeCap.Round
+            )
+            
+            // Bottom-right corner
+            drawLine(
+                color = cornerColor,
+                start = Offset(size.width - cornerLength, size.height),
+                end = Offset(size.width, size.height),
+                strokeWidth = cornerWidth,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = cornerColor,
+                start = Offset(size.width, size.height - cornerLength),
+                end = Offset(size.width, size.height),
+                strokeWidth = cornerWidth,
+                cap = StrokeCap.Round
+            )
+            
+            // Draw scanning line animation effect
+            val scanLineY = scanLinePosition * size.height
+            drawLine(
+                color = Color.White.copy(alpha = 0.6f),
+                start = Offset(cornerLength, scanLineY),
+                end = Offset(size.width - cornerLength, scanLineY),
                 strokeWidth = 2.dp.toPx(),
                 cap = StrokeCap.Round
             )
@@ -512,21 +677,117 @@ private fun ResultSheet(
         modifier = Modifier
             .fillMaxWidth()
             .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(
-            text = result.title,
-            style = MaterialTheme.typography.titleMedium
-        )
-        Text(
-            text = result.value,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onOpen) { Text(result.actionLabel) }
-            Button(onClick = onRescan) { Text("Rescan") }
+        // Success indicator
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.primary,
+                        shape = RoundedCornerShape(12.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "✓",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+            Text(
+                text = "Scan Successful",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
         }
-        Box(modifier = Modifier.height(12.dp))
+        
+        // Result type badge
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Text(
+                text = result.title,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        
+        // Scanned code image
+        result.barcodeImage?.let { bitmap ->
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Scanned Code",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    androidx.compose.foundation.Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Scanned QR/Barcode",
+                        modifier = Modifier
+                            .size(120.dp)
+                            .background(
+                                color = Color.White,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .padding(4.dp)
+                    )
+                }
+            }
+        }
+        
+        // Result content
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Text(
+                text = result.value,
+                modifier = Modifier.padding(16.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        
+        // Action buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = onOpen,
+                modifier = Modifier.weight(1f)
+            ) { 
+                Text(result.actionLabel) 
+            }
+            OutlinedButton(
+                onClick = onRescan,
+                modifier = Modifier.weight(1f)
+            ) { 
+                Text("Rescan") 
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
     }
 }
 
@@ -538,19 +799,64 @@ private fun SettingsSheet(
         modifier = Modifier
             .fillMaxWidth()
             .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            text = "Settings",
-            style = MaterialTheme.typography.titleMedium
+            text = "Settings & Info",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold
         )
-        Text(
-            text = "Opens the GitHub releases page in your browser. Download the APK there, then open it from Downloads (or your notification) to install.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Button(onClick = onOpenReleasesPage) {
-            Text("Get latest APK (GitHub)")
+        
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "About",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "QR & Barcode Scanner v1.1.0\n\nA modern scanner app supporting QR codes and various barcode formats with zoom functionality.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Updates",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = "Get the latest version from GitHub releases. Download the APK and install it from your Downloads folder.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+        
+        Button(
+            onClick = onOpenReleasesPage,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Get Latest Version")
         }
     }
 }
@@ -568,10 +874,37 @@ private fun openResultAction(context: Context, result: QrScanResult) {
         }
 
         ScanType.TEXT -> Unit
+        
+        ScanType.EMAIL -> {
+            val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${result.value}"))
+            context.startActivity(intent)
+        }
+        
+        ScanType.PHONE -> {
+            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${result.value}"))
+            context.startActivity(intent)
+        }
+        
+        ScanType.SMS -> {
+            val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${result.value}"))
+            context.startActivity(intent)
+        }
+        
+        ScanType.CALENDAR -> {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                type = "vnd.android.cursor.item/event"
+            }
+            context.startActivity(intent)
+        }
+        
+        ScanType.LOCATION -> {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("geo:${result.value}"))
+            context.startActivity(intent)
+        }
     }
 }
 
-private suspend fun scanQrFromGalleryImage(
+private suspend fun scanCodeFromGalleryImage(
     context: Context,
     scanner: BarcodeScanner,
     imageUri: Uri
@@ -582,7 +915,7 @@ private suspend fun scanQrFromGalleryImage(
         } ?: return null
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
         val image = InputImage.fromBitmap(bitmap, 0)
-        val barcodes = processImageForQrs(scanner, image)
+        val barcodes = processImageForCodes(scanner, image)
         barcodes.firstOrNull { it.rawValue?.isNotBlank() == true }
     } catch (_: IOException) {
         null
@@ -591,7 +924,7 @@ private suspend fun scanQrFromGalleryImage(
     }
 }
 
-private suspend fun processImageForQrs(
+private suspend fun processImageForCodes(
     scanner: BarcodeScanner,
     image: InputImage
 ): List<Barcode> = kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
@@ -608,7 +941,19 @@ private suspend fun processImageForQrs(
 private fun rememberQrScanner(): BarcodeScanner {
     val scanner = remember {
         val options = BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .setBarcodeFormats(
+                Barcode.FORMAT_QR_CODE,
+                Barcode.FORMAT_AZTEC,
+                Barcode.FORMAT_CODE_128,
+                Barcode.FORMAT_CODE_39,
+                Barcode.FORMAT_EAN_13,
+                Barcode.FORMAT_EAN_8,
+                Barcode.FORMAT_ITF,
+                Barcode.FORMAT_UPC_A,
+                Barcode.FORMAT_UPC_E,
+                Barcode.FORMAT_PDF417,
+                Barcode.FORMAT_DATA_MATRIX
+            )
             .build()
         BarcodeScanning.getClient(options)
     }
@@ -647,7 +992,8 @@ private data class QrScanResult(
     val title: String,
     val value: String,
     val type: ScanType,
-    val actionLabel: String
+    val actionLabel: String,
+    val barcodeImage: android.graphics.Bitmap? = null
 ) {
     companion object {
         fun fromBarcode(barcode: Barcode): QrScanResult {
@@ -667,17 +1013,67 @@ private data class QrScanResult(
                     actionLabel = "Open Wi-Fi"
                 )
 
-                else -> QrScanResult(
-                    title = "QR content",
+                Barcode.TYPE_EMAIL -> QrScanResult(
+                    title = "Email",
                     value = value,
-                    type = ScanType.TEXT,
-                    actionLabel = "Close"
+                    type = ScanType.EMAIL,
+                    actionLabel = "Open Email"
                 )
+
+                Barcode.TYPE_PHONE -> QrScanResult(
+                    title = "Phone",
+                    value = value,
+                    type = ScanType.PHONE,
+                    actionLabel = "Call"
+                )
+
+                Barcode.TYPE_SMS -> QrScanResult(
+                    title = "SMS",
+                    value = value,
+                    type = ScanType.SMS,
+                    actionLabel = "Open Messages"
+                )
+
+                Barcode.TYPE_CALENDAR_EVENT -> QrScanResult(
+                    title = "Calendar Event",
+                    value = value,
+                    type = ScanType.CALENDAR,
+                    actionLabel = "Open Calendar"
+                )
+
+                Barcode.TYPE_GEO -> QrScanResult(
+                    title = "Location",
+                    value = value,
+                    type = ScanType.LOCATION,
+                    actionLabel = "Open Maps"
+                )
+
+                else -> {
+                    val format = when (barcode.format) {
+                        Barcode.FORMAT_AZTEC -> "Aztec"
+                        Barcode.FORMAT_CODE_128 -> "Code 128"
+                        Barcode.FORMAT_CODE_39 -> "Code 39"
+                        Barcode.FORMAT_EAN_13 -> "EAN-13"
+                        Barcode.FORMAT_EAN_8 -> "EAN-8"
+                        Barcode.FORMAT_ITF -> "ITF"
+                        Barcode.FORMAT_UPC_A -> "UPC-A"
+                        Barcode.FORMAT_UPC_E -> "UPC-E"
+                        Barcode.FORMAT_PDF417 -> "PDF417"
+                        Barcode.FORMAT_DATA_MATRIX -> "Data Matrix"
+                        else -> "QR Code"
+                    }
+                    QrScanResult(
+                        title = "$format content",
+                        value = value,
+                        type = ScanType.TEXT,
+                        actionLabel = "Close"
+                    )
+                }
             }
         }
     }
 }
 
 private enum class ScanType {
-    URL, WIFI, TEXT
+    URL, WIFI, TEXT, EMAIL, PHONE, SMS, CALENDAR, LOCATION
 }
