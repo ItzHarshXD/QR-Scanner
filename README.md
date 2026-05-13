@@ -2,12 +2,12 @@
 
 A modern, feature-rich Android application for scanning QR codes and barcodes built with Jetpack Compose and CameraX.
 
-![QR Scanner App](https://img.shields.io/badge/Android-8%2B-green) ![Kotlin](https://img.shields.io/badge/Kotlin-1.9.0+-blue) ![Compose](https://img.shields.io/badge/Jetpack%20Compose-BOM-orange) ![License](https://img.shields.io/badge/License-MIT-purple)
+![QR Scanner App](https://img.shields.io/badge/Android-8%2B-green) ![Kotlin](https://img.shields.io/badge/Kotlin-1.9.0+-blue) ![Compose](https://img.shields.io/badge/Jetpack%20Compose-BOM-orange) 
 
 
 ## 📸 Screenshots
 
-      
+
 
 ## ✨ Features
 

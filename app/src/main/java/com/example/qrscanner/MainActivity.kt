@@ -3,6 +3,7 @@ package com.example.qrscanner
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -35,9 +36,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Cameraswitch
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FlashOff
 import androidx.compose.material.icons.outlined.FlashOn
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -53,6 +58,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -139,11 +145,13 @@ private fun QrScannerApp() {
     }
 
     var scannedResult by remember { mutableStateOf<QrScanResult?>(null) }
+    var lastSavedValue by remember { mutableStateOf<String?>(null) }
     var torchEnabled by remember { mutableStateOf(false) }
     /** When false, rear camera (default). When true, front/selfie camera. */
     var useFrontCamera by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var historyOpen by remember { mutableStateOf(false) }
     var zoomRatio by remember { mutableStateOf(0f) }
     var maxZoomRatio by remember { mutableStateOf(0f) }
     val imagePickerLauncher = rememberImagePickerLauncher { selectedUri ->
@@ -183,6 +191,12 @@ private fun QrScannerApp() {
                                 Icon(
                                     imageVector = Icons.Outlined.Settings,
                                     contentDescription = "Open settings"
+                                )
+                            }
+                            IconButton(onClick = { historyOpen = true }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.History,
+                                    contentDescription = "Open history"
                                 )
                             }
                         }
@@ -293,8 +307,11 @@ private fun QrScannerApp() {
                         },
                         onQrDetected = { barcode, bitmap ->
                             val raw = barcode.rawValue.orEmpty()
-                            if (raw.isNotBlank()) {
-                                scannedResult = QrScanResult.fromBarcode(barcode, bitmap)
+                            if (raw.isNotBlank() && raw != lastSavedValue) {
+                                val result = QrScanResult.fromBarcode(barcode, bitmap)
+                                scannedResult = result
+                                saveScanToHistory(context, result)
+                                lastSavedValue = raw
                             }
                         }
                     )
@@ -409,10 +426,33 @@ private fun QrScannerApp() {
                 )
             }
         }
+        
+        if (historyOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { historyOpen = false },
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            ) {
+                HistorySheet(
+                    scanHistory = getScanHistory(context),
+                    onClearHistory = {
+                        clearScanHistory(context)
+                        historyOpen = false
+                    },
+                    onClose = { 
+                        historyOpen = false
+                        scannedResult = null
+                        lastSavedValue = null
+                    }
+                )
+            }
+        }
 
         scannedResult?.let { result ->
             ModalBottomSheet(
-                onDismissRequest = { scannedResult = null },
+                onDismissRequest = { 
+                    scannedResult = null
+                    lastSavedValue = null
+                },
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
             ) {
                 ResultSheet(
@@ -420,7 +460,10 @@ private fun QrScannerApp() {
                     onOpen = {
                         openResultAction(context, result)
                     },
-                    onRescan = { scannedResult = null }
+                    onRescan = { 
+                        scannedResult = null
+                        lastSavedValue = null
+                    }
                 )
             }
         }
@@ -920,6 +963,139 @@ private fun SettingsSheet(
     }
 }
 
+@Composable
+private fun HistorySheet(
+    scanHistory: List<ScanHistoryEntry>,
+    onClearHistory: () -> Unit,
+    onClose: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Scan History",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            IconButton(
+                onClick = onClearHistory
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Delete,
+                    contentDescription = "Clear history"
+                )
+            }
+        }
+        
+        if (scanHistory.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "No scan history yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Your scanned QR codes and barcodes will appear here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(scanHistory) { entry ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = entry.title,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = formatTimestamp(entry.timestamp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        // Copy to clipboard
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.ContentCopy,
+                                        contentDescription = "Copy"
+                                    )
+                                }
+                            }
+                            Text(
+                                text = entry.value,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            OutlinedButton(
+                onClick = onClose,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Close")
+            }
+        }
+    }
+}
+
+private fun formatTimestamp(timestamp: Long): String {
+    val now = System.currentTimeMillis()
+    val diff = now - timestamp
+    
+    return when {
+        diff < 60000 -> "Just now"
+        diff < 3600000 -> "${diff / 60000} minutes ago"
+        diff < 86400000 -> "${diff / 3600000} hours ago"
+        diff < 604800000 -> "${diff / 86400000} days ago"
+        else -> "${diff / 604800000} weeks ago"
+    }
+}
+
 private fun openResultAction(context: Context, result: QrScanResult) {
     when (result.type) {
         ScanType.URL -> {
@@ -1143,4 +1319,68 @@ private data class QrScanResult(
 
 private enum class ScanType {
     URL, WIFI, TEXT, EMAIL, PHONE, SMS, CALENDAR, LOCATION
+}
+
+// Data class for scan history entry
+private data class ScanHistoryEntry(
+    val value: String,
+    val type: ScanType,
+    val timestamp: Long,
+    val title: String
+)
+
+// SharedPreferences helper functions
+private fun getScanHistory(context: Context): List<ScanHistoryEntry> {
+    val prefs = context.getSharedPreferences("scan_history", Context.MODE_PRIVATE)
+    val historySet = prefs.getStringSet("history", emptySet())
+    
+    return historySet?.mapNotNull { entry ->
+        val parts = entry.split("|")
+        if (parts.size >= 4) {
+            val timestamp = parts[0].toLongOrNull() ?: 0L
+            val title = parts[1]
+            val value = parts[2]
+            val type = try {
+                ScanType.valueOf(parts[3])
+            } catch (e: Exception) {
+                ScanType.TEXT
+            }
+            ScanHistoryEntry(value, type, timestamp, title)
+        } else {
+            null
+        }
+    }?.sortedByDescending { it.timestamp } ?: emptyList()
+}
+
+private fun saveScanToHistory(context: Context, result: QrScanResult) {
+    val prefs = context.getSharedPreferences("scan_history", Context.MODE_PRIVATE)
+    val historySet = prefs.getStringSet("history", emptySet())?.toMutableSet() ?: mutableSetOf()
+    
+    val timestamp = System.currentTimeMillis()
+    val entry = "${timestamp}|${result.title}|${result.value}|${result.type}"
+    
+    historySet.add(entry)
+    
+    // Keep only last 50 scans
+    if (historySet.size > 50) {
+        val sortedList = historySet.mapNotNull { rawEntry ->
+            val parts = rawEntry.split("|")
+            if (parts.isNotEmpty()) {
+                val ts = parts[0].toLongOrNull() ?: 0L
+                ts to rawEntry
+            } else {
+                null
+            }
+        }.sortedByDescending { it.first }.take(50)
+        
+        historySet.clear()
+        sortedList.forEach { historySet.add(it.second) }
+    }
+    
+    prefs.edit().putStringSet("history", historySet).apply()
+}
+
+private fun clearScanHistory(context: Context) {
+    val prefs = context.getSharedPreferences("scan_history", Context.MODE_PRIVATE)
+    prefs.edit().remove("history").apply()
 }
