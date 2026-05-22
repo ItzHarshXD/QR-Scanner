@@ -924,7 +924,7 @@ private fun SettingsSheet(
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = "QR & Barcode Scanner v1.1.0\n\nA modern scanner app supporting QR codes and various barcode formats with zoom functionality.",
+                    text = "QR & Barcode Scanner v1.3.1\n\nA modern scanner app supporting QR codes and various barcode formats with zoom functionality.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
