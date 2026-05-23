@@ -7,9 +7,11 @@ A modern, feature-rich Android application for scanning QR codes and barcodes bu
 
 ## 📸 Screenshots
 
-<img width="720" height="1560" alt="image" src="https://github.com/user-attachments/assets/236dd346-417b-43de-9755-b2b80c4324ae" />
-<img width="720" height="1560" alt="image" src="https://github.com/user-attachments/assets/19d0f603-6a9d-41c8-9ed3-8789e92750f4" />
-<img width="720" height="1560" alt="image" src="https://github.com/user-attachments/assets/ce397cdf-9163-4802-b54d-6710cbe212dc" />
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/236dd346-417b-43de-9755-b2b80c4324ae" width="30%" />
+  <img src="https://github.com/user-attachments/assets/19d0f603-6a9d-41c8-9ed3-8789e92750f4" width="30%" />
+  <img src="https://github.com/user-attachments/assets/ce397cdf-9163-4802-b54d-6710cbe212dc" width="30%" />
+</p>
 
 
 ## ✨ Features
